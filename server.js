@@ -1,73 +1,69 @@
 const express = require('express');
 const axios = require('axios');
-const makeWASocket = require('@whiskeysockets/baileys').default;
-const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
 
 const app = express();
 app.use(express.json());
 
-// ⚠️ Nenhuma chave aqui — só leitura das variáveis de ambiente
+// Variáveis de ambiente (configuradas no Render)
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const WHATSAPP_NUMBER = process.env.WHATSAPP_NUMBER;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
+// Validação inicial
 if (!GEMINI_API_KEY) {
-  console.error('❌ ERRO: GEMINI_API_KEY não definida. Configure no Render.');
+  console.error('❌ GEMINI_API_KEY não definida. Configure no Render.');
   process.exit(1);
 }
-if (!WHATSAPP_NUMBER) {
-  console.error('❌ ERRO: WHATSAPP_NUMBER não definida. Configure no Render.');
+if (!WHATSAPP_TOKEN) {
+  console.error('❌ WHATSAPP_TOKEN não definida. Configure no Render.');
+  process.exit(1);
+}
+if (!WHATSAPP_PHONE_NUMBER_ID) {
+  console.error('❌ WHATSAPP_PHONE_NUMBER_ID não definida. Configure no Render.');
   process.exit(1);
 }
 
-let sock;
+const WHATSAPP_API_URL = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-async function conectarWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-  
-  sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true 
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', (update) => {
-    const { connection, qr } = update;
-    
-    if (qr) {
-      console.log('\n\n--- QR CODE PARA WHATSAPP ---\n');
-      qrcode.generate(qr, { small: true });
-      console.log('\nEscaneie com: WhatsApp > Menu > WhatsApp Web\n');
-    }
-    
-    if (connection === 'open') {
-      console.log('✅ WhatsApp conectado!');
-    }
-  });
-}
-
-// Rota de teste (não remove)
+// Rota raiz (teste rápido)
 app.get('/', (req, res) => {
-  res.send('Sydi está online. Verifique os logs para o QR code.');
+  res.send('Sydi está online. Use POST /webhook para enviar mensagens.');
 });
 
 // Webhook para recebimento de leads
 app.post('/webhook', async (req, res) => {
-  const { nome, whatsapp, marca, plano, servico } = req.body;
-  const numeroCliente = `${whatsapp}@s.whatsapp.net`;
+  const { nome, whatsapp, servico } = req.body;
+
+  // Validação mínima
+  if (!nome || !whatsapp) {
+    return res.status(400).json({ error: 'nome e whatsapp são obrigatórios' });
+  }
+
+  const mensagem = `Olá ${nome}! Recebemos sua solicitação para ${servico || 'registro de marca'}. O Sid entrará em contato em breve.`;
 
   try {
-    const mensagem = `Olá ${nome}! Recebemos sua solicitação para ${servico || 'registro de marca'}. O Sid entrará em contato em breve.`;
-    await sock.sendMessage(numeroCliente, { text: mensagem });
-    res.status(200).send({ status: "Sucesso" });
+    await axios.post(WHATSAPP_API_URL, {
+      messaging_product: 'whatsapp',
+      to: whatsapp,
+      type: 'text',
+      text: { body: mensagem }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log(`✅ Mensagem enviada para ${nome} (${whatsapp})`);
+    res.status(200).json({ status: 'success', message: 'Mensagem enviada' });
   } catch (error) {
-    console.error("Erro:", error.message);
-    res.status(500).send({ error: "Falha no envio" });
+    console.error('❌ Erro ao enviar:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Falha ao enviar mensagem' });
   }
 });
 
+// Porta do Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Sydi rodando na porta ${PORT}`);
-  conectarWhatsApp(); // Inicia conexão imediatamente
+  console.log(`🚀 Sydi (WhatsApp Cloud API) rodando na porta ${PORT}`);
 });
